@@ -1,0 +1,55 @@
+sequenceDiagram
+    participant Customer
+    participant MobileApp as Mobile App
+    participant Gateway as API Gateway
+    participant Auth as Auth Service
+    participant DB as Database
+    participant SMS as SMS Provider
+
+    Customer->>MobileApp: Enter customer ID and password
+    MobileApp->>MobileApp: Validate fields and format
+    MobileApp->>Gateway: POST /auth/login
+    Gateway->>Gateway: Rate limit check
+
+    alt Too many requests
+        Gateway-->>MobileApp: 429 Too Many Requests
+    else Within limit
+        Gateway->>Auth: Forward credentials
+        Auth->>DB: Lookup customer by ID
+        DB-->>Auth: Customer record
+        Auth->>Auth: Verify password hash and account status
+
+        alt Invalid password
+            Auth->>DB: Increment failure counter
+            alt Three failures
+                Auth->>DB: Lock account
+                Auth-->>Gateway: 423 Locked
+            else Fewer than three failures
+                Auth-->>Gateway: 401 Unauthorized
+            end
+            Gateway-->>MobileApp: Error response
+        else Valid password and active account
+            Auth->>Auth: Generate OTP
+            Auth->>DB: Store OTP with expiry
+            Auth->>SMS: Send OTP to registered mobile
+            SMS-->>Customer: OTP message
+            Auth-->>Gateway: OTP challenge required
+            Gateway-->>MobileApp: 200 OTP Required
+        end
+    end
+
+    Customer->>MobileApp: Enter OTP
+    MobileApp->>Gateway: POST /auth/verify-otp
+    Gateway->>Auth: Forward OTP
+    Auth->>DB: Validate OTP and expiry
+
+    alt OTP invalid or expired
+        Auth-->>Gateway: 401 OTP invalid
+        Gateway-->>MobileApp: 401 OTP invalid
+    else OTP valid
+        Auth->>Auth: Generate signed JWT
+        Auth->>DB: Store session
+        Auth-->>Gateway: 200 OK + JWT
+        Gateway-->>MobileApp: 200 OK + JWT
+        MobileApp->>MobileApp: Store token securely
+    end
